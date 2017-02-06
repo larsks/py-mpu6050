@@ -9,33 +9,67 @@ import ustruct as struct
 default_pin_scl = 2
 default_pin_sda = 0
 
-Register = collections.namedtuple('Register', ('address', 'size', 'read', 'write'))
+Register = collections.namedtuple('Register',
+                                  ('address', 'size',
+                                   'read', 'write',
+                                   'txout', 'txin'))
+
+def to_2c(val):
+    return val - (1 << 16)
+
+def to_2c_array(val):
+    pass
+
+def from_bytes(buf):
+    val = (buf[0] << 8) + buf[1]
+    return val
+
+def from_2c(buf):
+    val = (buf[0] << 8) + buf[1]
+
+    if (val >= 0x8000):
+        val = -(((2**16 - 1) - val) + 1)
+
+    return val
+
+def from_2c_array(buf):
+    bufiter = iter(buf)
+    res = []
+    for vh, vl in zip(bufiter, bufiter):
+        val = (vh << 8) + vl
+        if (val >= 0x8000):
+            val = -(((2**16 - 1) - val) + 1)
+
+        res.append(val)
+
+    return res
 
 registers = {
-    'power_mgmt_1': Register(0x6b, 1, True, True),
-    'power_mgmt_2': Register(0x6c, 1, True, True),
+    'power_mgmt_1': Register(0x6b, 1, True, True, None, None),
+    'power_mgmt_2': Register(0x6c, 1, True, True, None, None),
+    'accel_config': Register(0x1c, 1, True, True, None, None),
+    'gyro_config': Register(0x18, 1, True, True, None, None),
+    'int_enable': Register(0x38, 1, True, True, None, None),
+    'int_status': Register(0x3A, 1, True, False, None, None),
+    'user_ctrl': Register(0x6A, 1, True, True, None, None),
+    'fifo_count': Register(0x72, 2, True, True, from_bytes, None),
+    'fifo_rw': Register(0x74, 1, True, True, None, None),
+    'sample_rate_div': Register(0x19, 1, True, True, None, None),
+    'config': Register(0x1A, 1, True, True, None, None),
 
-    'gyro_config': Register(0x18, 1, True, True),
-    'gyro_x': Register(0x43, 2, True, False),
-    'gyro_y': Register(0x45, 2, True, False),
-    'gyro_z': Register(0x47, 2, True, False),
+    'accel_x': Register(0x3b, 2, True, False, from_2c, None),
+    'accel_y': Register(0x3d, 2, True, False, from_2c, None),
+    'accel_z': Register(0x3f, 2, True, False, from_2c, None),
 
-    'accel_config': Register(0x1c, 1, True, True),
-    'accel_x': Register(0x3b, 2, True, False),
-    'accel_y': Register(0x3d, 2, True, False),
-    'accel_z': Register(0x3f, 2, True, False),
+    'temp': Register(0x41, 2, True, False, from_2c, None),
 
-    'temp': Register(0x41, 2, True, False),
+    'gyro_x': Register(0x43, 2, True, False, from_2c, None),
+    'gyro_y': Register(0x45, 2, True, False, from_2c, None),
+    'gyro_z': Register(0x47, 2, True, False, from_2c, None),
 
-    'int_enable': Register(0x38, 1, True, True),
-    'int_status': Register(0x3A, 1, True, False),
-
-    'user_ctrl': Register(0x6A, 1, True, True),
-    'fifo_count': Register(0x72, 2, True, True),
-    'fifo_rw': Register(0x74, 1, True, True),
-
-    'sample_rate_div': Register(0x19, 1, True, True),
-    'config': Register(0x1A, 1, True, True),
+    'sensors': Register(0x3b, 14, True, False, from_2c_array, None),
+    'accel_all': Register(0x3b, 6, True, False, from_2c_array, None),
+    'gyro_all': Register(0x43, 6, True, False, from_2c_array, None),
 }
 
 # scale in deg/s
@@ -43,15 +77,6 @@ gyro_scale = [250, 500, 1000, 2000]
 
 # scale in g
 accel_scale = [2, 4, 8, 16]
-
-def to_2c(val):
-    return val - (1 << 16)
-
-def from_2c(val):
-    if (val >= 0x8000):
-        val = -(((2**16 - 1) - val) + 1)
-
-    return val
 
 class MPU6050(dict):
     temp_divider = 340
@@ -64,8 +89,7 @@ class MPU6050(dict):
         self.bus = machine.I2C(scl=machine.Pin(scl),
                                sda=machine.Pin(sda))
         self.address = address
-        self.buf1 = bytearray([0])
-        self.buf2 = bytearray([0, 0])
+        self.buf = memoryview(bytearray(16))
 
         if init:
             self.init_device()
@@ -78,20 +102,35 @@ class MPU6050(dict):
         if not reg.read:
             raise NotImplementedError('register %s cannot be read', k)
 
-        if reg.size == 2:
-            return self.read_word(reg.address)
-        else:
-            return self.read_byte(reg.address)
+        data = self.read(reg.address, reg.size)
+        if callable(reg.txout):
+            data = reg.txout(data)
+        elif reg.size == 1:
+            data = data[0]
+
+        return data
 
     def __setitem__(self, k, v):
         reg = registers[k]
         if not reg.write:
             raise NotImplementedError('register %s cannot be written', k)
 
-        if reg.size == 2:
-            self.write_word(reg.address, v)
-        else:
-            self.write_byte(reg.address, v)
+        if callable(reg.txin):
+            v = reg.txin(v)
+        elif isinstance(v, int):
+            v = bytearray([v])
+
+        self.write(reg.address, v)
+
+    def read(self, reg, length):
+        if length > len(self.buf):
+            raise ValueError('Length must be <= {}'.format(len(m)))
+
+        self.bus.readfrom_mem_into(self.address, reg, self.buf[:length])
+        return self.buf[:length]
+
+    def write(self, reg, val):
+        self.bus.writeto_mem(self.address, reg, val)
 
     def keys(self):
         return registers.keys()
@@ -99,30 +138,12 @@ class MPU6050(dict):
     def init_device(self):
         self['power_mgmt_1'] = 0
 
-    def write_byte(self, reg, val):
-        self.buf1[0] = val
-        self.bus.writeto_mem(self.address, reg, self.buf1)
-
-    def write_word(self, reg, val):
-        val = to_2c(val)
-        struct.pack_into('!h', self.buf2, 0, val)
-        self.bus.writeto_mem(self.address, reg, self.buf2)
-
-    def read_byte(self, reg):
-        self.bus.readfrom_mem_into(self.address, reg, self.buf1)
-        return self.buf1[0]
-
-    def read_word(self, reg):
-        self.bus.readfrom_mem_into(self.address, reg, self.buf2)
-        val = (self.buf2[0] << 8) + self.buf2[1]
-        return from_2c(val)
+    def set_dlpf(self, val):
+        cfg = (self['config'] & 0b11111000) | val
+        self['config'] = cfg
 
     def read_gyro_raw(self):
-        val = [
-            self['gyro_x'], self['gyro_y'], self['gyro_z']
-        ]
-
-        return val
+        return self['gyro_all']
 
     def read_gyro_scaled(self):
         val = self.read_gyro_raw()
@@ -140,11 +161,7 @@ class MPU6050(dict):
         self['gyro_config'] = cfg
 
     def read_accel_raw(self):
-        val = [
-            self['accel_x'], self['accel_y'], self['accel_z']
-        ]
-
-        return val
+        return self['accel_all']
 
     def read_accel_scaled(self):
         val = self.read_accel_raw()
