@@ -82,7 +82,7 @@ class MPU6050(dict):
     temp_divider = 340
     temp_offset = 35
 
-    def __init__(self, scl=None, sda=None, address=0x68, init=True):
+    def __init__(self, scl=None, sda=None, address=0x68):
         scl = scl if scl is not None else default_pin_scl
         sda = sda if sda is not None else default_pin_sda
 
@@ -91,8 +91,11 @@ class MPU6050(dict):
         self.address = address
         self.buf = memoryview(bytearray(16))
 
-        if init:
-            self.init_device()
+        # used by the complementary filter
+        self.lastsample = time.ticks_ms()
+
+        self.init_device()
+        self.init_filter()
 
     def __repr__(self):
         return '<mpu6050 @ %02X>' % self.address
@@ -186,31 +189,52 @@ class MPU6050(dict):
         val = self.read_temp_raw()
         return (val/self.temp_divider) + self.temp_offset
 
-    # from: http://www.hobbytronics.co.uk/accelerometer-info
+    # from: http://stackoverflow.com/questions/3755059/3d-accelerometer-calculate-the-orientation
+    # and: http://www.nxp.com/assets/documents/data/en/application-notes/AN3461.pdf
     def read_accel_rad(self):
-       x, y, z = self.read_accel_scaled()
+        x, y, z = self.read_accel_scaled()
 
-       x2 = (x*x);
-       y2 = (y*y);
-       z2 = (z*z);
+        x2 = (x*x);
+        y2 = (y*y);
+        z2 = (z*z);
 
-       ax = math.atan(x/(math.sqrt(y2 + z2)));
-       ay = math.atan(y/(math.sqrt(x2 + z2)));
-       az = math.atan(z/(math.sqrt(x2 + y2)));
+        # this is equation 37 (aka 26) from AN3461
+        pitch = math.atan2(-x, math.sqrt(y2 + z2))
 
-       return [ax, ay, az]
+        # this is equation 38 from AN3461
+        roll = math.atan2(y, (
+            math.copysign(1, z)
+            * (math.sqrt(z2 + (0.001)*x2))))
+
+        return [pitch, roll, 0]
 
     def read_accel_deg(self):
         return [math.degrees(v) for v in self.read_accel_rad()]
 
-def dist(a,b):
-    return math.sqrt((a*a)+(b*b))
+    def init_filter(self):
+        self.lastsample = time.ticks_ms()
+        self.pitch = 0
+        self.roll = 0
+        self.yaw = 0
 
-def get_y_rotation(x,y,z):
-    radians = math.atan2(x, dist(y,z))
-    return -math.degrees(radians)
+    gyro_weight = 0.98
+    accel_weight = 0.02
 
-def get_x_rotation(x,y,z):
-    radians = math.atan2(y, dist(x,z))
-    return math.degrees(radians)
+    def read_deg(self):
+        now = time.ticks_ms()
+        dt = time.ticks_diff(self.lastsample, now)/1000
+        self.lastsample = now
 
+        gyro = self.read_gyro_scaled()
+        accel = self.read_accel_deg()
+
+        dpitch = gyro[0] * dt
+        droll = gyro[1] * dt
+
+        pitch = self.pitch + dpitch
+        roll = self.roll + droll
+
+        self.pitch = pitch * self.gyro_weight + accel[0] * self.accel_weight
+        self.roll = roll * self.gyro_weight + accel[1] * self.accel_weight
+
+        return [self.pitch, self.roll, self.yaw]
