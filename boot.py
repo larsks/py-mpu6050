@@ -4,7 +4,7 @@ import network
 import machine
 from machine import Pin
 
-webrepl.start()
+#webrepl.start()
 gc.collect()
 
 sta_if = network.WLAN(network.STA_IF)
