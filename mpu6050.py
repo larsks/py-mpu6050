@@ -213,12 +213,10 @@ class MPU6050(dict):
 
     def init_filter(self):
         self.lastsample = time.ticks_ms()
-        self.pitch = 0
-        self.roll = 0
-        self.yaw = 0
+        self.pitch, self.roll, self.yaw = self.read_accel_deg()
 
-    gyro_weight = 0.98
-    accel_weight = 0.02
+    gyro_weight = 0.7
+    accel_weight = 0.3
 
     def read_deg(self):
         now = time.ticks_ms()
@@ -228,13 +226,15 @@ class MPU6050(dict):
         gyro = self.read_gyro_scaled()
         accel = self.read_accel_deg()
 
+        accel_pitch = accel[0]
+        accel_roll = accel[1]
+
         dpitch = gyro[0] * dt
         droll = gyro[1] * dt
 
-        pitch = self.pitch + dpitch
-        roll = self.roll + droll
-
-        self.pitch = pitch * self.gyro_weight + accel[0] * self.accel_weight
-        self.roll = roll * self.gyro_weight + accel[1] * self.accel_weight
+        self.pitch = (self.gyro_weight * (self.pitch + dpitch)
+                      + self.accel_weight * accel_roll)
+        self.roll = (self.gyro_weight * (self.roll + droll)
+                     + self.accel_weight * accel_pitch)
 
         return [self.pitch, self.roll, self.yaw]
