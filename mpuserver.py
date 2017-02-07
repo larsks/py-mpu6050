@@ -5,6 +5,7 @@ from mpu6050 import MPU6050
 import socket
 import select
 import time
+import json
 
 mpu = MPU6050()
 
@@ -25,7 +26,13 @@ def serve(port=8000, interval=1):
         ready = poll.poll(max(0, interval-delta))
 
         if delta >= interval:
-            values = mpu.read_accel_deg()
+            values = {
+                'a': mpu.read_accel_scaled(),
+                'g': mpu.read_gyro_scaled(),
+                'pos': mpu.read_accel_deg(),
+                'fpos': mpu.read_deg(),
+            }
+
             lastsample = time.ticks_ms()
 
             for c in clients.values():
@@ -52,7 +59,7 @@ def serve(port=8000, interval=1):
                 client = clients[id(obj)]
 
                 try:
-                    obj.write('''[%0.2f, %0.2f, %0.2f]\n''' % tuple(values))
+                    obj.write('{}\n'.format(json.dumps(values)))
                 except OSError:
                     print('lost connection from {}'.format(client[1]))
                     del clients[id(obj)]
