@@ -54,6 +54,7 @@ registers = {
     'user_ctrl': Register(0x6A, 1, True, True, None, None),
     'fifo_count': Register(0x72, 2, True, True, from_bytes, None),
     'fifo_rw': Register(0x74, 1, True, True, None, None),
+    'fifo_en': Register(0x23, 1, True, True, None, None),
     'sample_rate_div': Register(0x19, 1, True, True, None, None),
     'config': Register(0x1A, 1, True, True, None, None),
 
@@ -95,7 +96,12 @@ class MPU6050(dict):
         self.lastsample = time.ticks_ms()
 
         self.init_device()
+        self.init_calibration()
         self.init_filter()
+
+    def init_calibration(self):
+        self.accel_cal = [0] * 3
+        self.gyro_cal = [0] * 3
 
     def __repr__(self):
         return '<mpu6050 @ %02X>' % self.address
@@ -145,8 +151,32 @@ class MPU6050(dict):
         cfg = (self['config'] & 0b11111000) | val
         self['config'] = cfg
 
+    def wait_for_stable(self):
+        '''wait for gyro reading to stabilize'''
+
+    def calibrate(self):
+        samples = []
+        for i in range(100):
+            samples.append(self['sensors'])
+
+        self.accel_cal = [
+            sum(sample[0] for sample in samples)/len(samples),
+            sum(sample[1] for sample in samples)/len(samples),
+            sum(sample[2] for sample in samples)/len(samples),
+        ]
+
+        rangehi = self.get_accel_scale()
+        grav = 65536/2/rangehi
+        self.accel_cal[2] -= grav
+
+        self.gyro_cal = [
+            sum(sample[4] for sample in samples)/len(samples),
+            sum(sample[5] for sample in samples)/len(samples),
+            sum(sample[6] for sample in samples)/len(samples),
+        ]
+
     def read_gyro_raw(self):
-        return self['gyro_all']
+        return [(vr-vc) for vr, vc in zip(self['gyro_all'], self.gyro_cal)]
 
     def read_gyro_scaled(self):
         val = self.read_gyro_raw()
@@ -164,7 +194,7 @@ class MPU6050(dict):
         self['gyro_config'] = cfg
 
     def read_accel_raw(self):
-        return self['accel_all']
+        return [(vr-vc) for vr, vc in zip(self['accel_all'], self.accel_cal)]
 
     def read_accel_scaled(self):
         val = self.read_accel_raw()
@@ -180,6 +210,10 @@ class MPU6050(dict):
         i = accel_scale.index(scale)
         cfg = (self['accel_config'] & 0b11100111) | (i<<3)
         self['accel_config'] = cfg
+
+    def get_accel_scale(self):
+        scalei = (self['accel_config'] & 0b00011000) >> 3
+        return accel_scale[scalei]
 
     def read_temp_raw(self):
         val = self['temp']
