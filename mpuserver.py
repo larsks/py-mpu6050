@@ -9,7 +9,7 @@ import time
 
 mpu = MPU()
 
-def serve(port=8000, interval=10):
+def serve(port=8000, interval=20):
     print('starting mpu server on port {}'.format(port))
 
     mpu.calibrate()
@@ -21,16 +21,18 @@ def serve(port=8000, interval=10):
     poll = select.poll()
     poll.register(server, select.POLLIN)
     clients = {}
-    lastsample = 0
+    lastsent = 0
+    lastread = 0
     while True:
         now = time.ticks_ms()
-        delta = time.ticks_diff(now, lastsample)
-        ready = poll.poll(max(0, interval-delta))
+        write_dt = time.ticks_diff(now, lastsent)
+        read_dt = time.ticks_diff(now, lastread)
+        ready = poll.poll(max(0, 1-read_dt))
+        values = mpu.read_angles()
+        lastread = now
 
-        if delta >= interval:
-            values = mpu.read_angles()
-            lastsample = time.ticks_ms()
-
+        if write_dt >= interval:
+            lastsent = time.ticks_ms()
             for c in clients.values():
                 poll.register(c[0])
 
