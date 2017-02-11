@@ -4,6 +4,7 @@ import micropython
 from ustruct import unpack
 
 from constants import *
+import angles
 
 micropython.alloc_emergency_exception_buf(100)
 
@@ -32,6 +33,8 @@ class MPU(object):
         self.sensors = bytearray(14)
         self.use_fifo = False
         self.calibration = [0] * 7
+
+        self.angles = angles.Angles()
 
         self.init_pins()
         self.init_i2c()
@@ -200,6 +203,16 @@ class MPU(object):
 
         data = unpack('>hhhhhhh', data)
         return [data[i] + self.calibration[i] for i in range(7)]
+
+    def read_sensors_scaled(self):
+        data = self.read_sensors()
+        data[0:3] = [x/(65536//2//2) for x in data[0:3]]
+        data[4:7] = [x/(65536//250//2) for x in data[4:7]]
+        return data
+
+    def read_angles(self):
+        self.angles.input(self.read_sensors_scaled())
+        return self.angles.angles()
 
     def _read_sensor_regs(self):
         self.bus.readfrom_mem_into(self.address,

@@ -6,7 +6,8 @@ SRC = \
 	mpu6050.py \
 	constants.py \
 	batmon.py \
-	mpuserver.py
+	mpuserver.py \
+	angles.py
 
 OBJ = $(SRC:.py=.mpy)
 
