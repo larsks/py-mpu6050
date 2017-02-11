@@ -1,0 +1,2 @@
+import mpuserver
+mpuserver.serve()

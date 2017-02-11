@@ -8,7 +8,7 @@ SRC = \
 	batmon.py \
 	mpuserver.py
 
-OBJ = boot.py $(SRC:.py=.mpy)
+OBJ = boot.py main.py $(SRC:.py=.mpy)
 
 %.mpy: %.py
 	$(MPYCROSS) -o $@ $<
