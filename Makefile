@@ -8,7 +8,9 @@ SRC = \
 	batmon.py \
 	mpuserver.py
 
-OBJ = boot.py main.py $(SRC:.py=.mpy)
+OBJ = $(SRC:.py=.mpy)
+
+STATIC = main.py boot.py
 
 %.mpy: %.py
 	$(MPYCROSS) -o $@ $<
@@ -17,7 +19,7 @@ all: $(OBJ)
 
 install: .lastbuild
 
-.lastbuild: $(OBJ)
+.lastbuild: $(OBJ) $(STATIC)
 	set -x; for src in $?; do $(AMPY) put $$src; done
 	date > .lastbuild
 
@@ -28,4 +30,4 @@ reset:
 	$(AMPY) reset
 
 clean:
-	rm -f .lastbuild
+	rm -f .lastbuild $(OBJ)
