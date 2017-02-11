@@ -12,7 +12,7 @@ default_pin_sda = 12
 default_pin_intr = 14
 default_sample_rate = 0x20
 
-default_calibration_samples = 1000
+default_calibration_samples = 100
 default_calibration_accel_deadzone = 15
 default_calibration_gyro_deadzone = 5
 
@@ -267,9 +267,9 @@ class MPU(object):
                 break
 
             if not accel_ready:
-                off[0:3] = [off[i] + check[i]/accel_deadzone for i in range(3)]
+                off[0:3] = [off[i] + check[i]//accel_deadzone for i in range(3)]
 
             if not gyro_read:
-                off[4:7] = [off[i] + check[i]/gyro_deadzone for i in range(4, 7)]
+                off[4:7] = [off[i] + check[i]//gyro_deadzone for i in range(4, 7)]
 
         print('* calibrated!')
