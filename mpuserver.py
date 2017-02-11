@@ -28,7 +28,7 @@ def serve(port=8000, interval=10):
         ready = poll.poll(max(0, interval-delta))
 
         if delta >= interval:
-            values = mpu.read_sensors()
+            values = mpu.read_angles()
             lastsample = time.ticks_ms()
 
             for c in clients.values():
@@ -57,7 +57,7 @@ def serve(port=8000, interval=10):
 
                 try:
                     obj.write('[')
-                    obj.write(', '.join('{:d}'.format(x) for x in values))
+                    obj.write(', '.join('{:f}'.format(x) for x in values))
                     obj.write(']\n')
                 except OSError:
                     print('lost connection from {}'.format(client[1]))
