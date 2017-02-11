@@ -1,4 +1,5 @@
 import os
+import gc
 
 from mpu6050 import MPU
 
@@ -47,8 +48,9 @@ def serve(port=8000, interval=10):
                 client = clients[id(obj)]
                 print('client {} has disconnected'.format(client[1]))
                 obj.close()
-                poll.unregister(obj)
                 del clients[id(obj)]
+                poll.unregister(obj)
+                gc.collect()
 
             elif eventmask & select.POLLOUT:
                 client = clients[id(obj)]
@@ -59,9 +61,10 @@ def serve(port=8000, interval=10):
                     obj.write(']\n')
                 except OSError:
                     print('lost connection from {}'.format(client[1]))
+                    obj.close()
                     del clients[id(obj)]
-                    poll.unregister(obj)
-                else:
-                    poll.unregister(client[0])
+                    gc.collect()
+
+                poll.unregister(obj)
             else:
                 print('client says what?')
