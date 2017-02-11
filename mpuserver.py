@@ -1,20 +1,21 @@
 import os
 
-from mpu6050 import MPU6050
+from mpu6050 import MPU
 
 import socket
 import select
 import time
-import json
 
-mpu = MPU6050()
+mpu = MPU()
 
-def serve(port=8000, interval=1):
+def serve(port=8000, interval=10):
     print('starting mpu server on port {}'.format(port))
+
+    mpu.calibrate()
 
     server = socket.socket()
     server.bind(('0.0.0.0', port))
-    server.listen(5)
+    server.listen(2)
 
     poll = select.poll()
     poll.register(server, select.POLLIN)
@@ -26,13 +27,7 @@ def serve(port=8000, interval=1):
         ready = poll.poll(max(0, interval-delta))
 
         if delta >= interval:
-            values = {
-                'a': mpu.read_accel_scaled(),
-                'g': mpu.read_gyro_scaled(),
-                'pos': mpu.read_accel_deg(),
-                'fpos': mpu.read_deg(),
-            }
-
+            values = mpu.read_sensors()
             lastsample = time.ticks_ms()
 
             for c in clients.values():
@@ -59,7 +54,9 @@ def serve(port=8000, interval=1):
                 client = clients[id(obj)]
 
                 try:
-                    obj.write('{}\n'.format(json.dumps(values)))
+                    obj.write('[')
+                    obj.write(', '.join('{:d}'.format(x) for x in values))
+                    obj.write(']\n')
                 except OSError:
                     print('lost connection from {}'.format(client[1]))
                     del clients[id(obj)]

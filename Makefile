@@ -5,7 +5,8 @@ MPYCROSS = mpy-cross
 SRC = \
 	mpu6050.py \
 	constants.py \
-	batmon.py
+	batmon.py \
+	mpuserver.py
 
 OBJ = boot.py $(SRC:.py=.mpy)
 
