@@ -1,274 +1,275 @@
-#!/usr/bin/python
-
-import machine
-import math
+from machine import Pin, I2C, disable_irq, enable_irq
 import time
-import ucollections as collections
-import ustruct as struct
+import micropython
+from ustruct import unpack
 
-default_pin_scl = 2
-default_pin_sda = 0
+from constants import *
 
-Register = collections.namedtuple('Register',
-                                  ('address', 'size',
-                                   'read', 'write',
-                                   'txout', 'txin'))
+micropython.alloc_emergency_exception_buf(100)
 
-def to_2c(val):
-    return val - (1 << 16)
+default_pin_scl = 13
+default_pin_sda = 12
+default_pin_intr = 14
+default_sample_rate = 0x20
 
-def to_2c_array(val):
-    pass
+default_calibration_samples = 1000
+default_calibration_accel_deadzone = 15
+default_calibration_gyro_deadzone = 5
 
-def from_bytes(buf):
-    val = (buf[0] << 8) + buf[1]
-    return val
+class MPU(object):
+    def __init__(self, scl=None, sda=None,
+                 intr=None, rate=None,
+                 address=None):
 
-def from_2c(buf):
-    val = (buf[0] << 8) + buf[1]
+        self.scl = scl if scl is not None else default_pin_scl
+        self.sda = sda if sda is not None else default_pin_sda
+        self.intr = intr if intr is not None else default_pin_intr
+        self.rate = rate if rate is not None else default_sample_rate
 
-    if (val >= 0x8000):
-        val = -(((2**16 - 1) - val) + 1)
+        self.address = address if address else MPU6050_DEFAULT_ADDRESS
+        self.bytebuf = bytearray(1)
+        self.wordbuf = bytearray(2)
+        self.sensors = bytearray(14)
+        self.use_fifo = False
+        self.calibration = [0] * 7
 
-    return val
-
-def from_2c_array(buf):
-    bufiter = iter(buf)
-    res = []
-    for vh, vl in zip(bufiter, bufiter):
-        val = (vh << 8) + vl
-        if (val >= 0x8000):
-            val = -(((2**16 - 1) - val) + 1)
-
-        res.append(val)
-
-    return res
-
-registers = {
-    'power_mgmt_1': Register(0x6b, 1, True, True, None, None),
-    'power_mgmt_2': Register(0x6c, 1, True, True, None, None),
-    'accel_config': Register(0x1c, 1, True, True, None, None),
-    'gyro_config': Register(0x18, 1, True, True, None, None),
-    'int_enable': Register(0x38, 1, True, True, None, None),
-    'int_status': Register(0x3A, 1, True, False, None, None),
-    'user_ctrl': Register(0x6A, 1, True, True, None, None),
-    'fifo_count': Register(0x72, 2, True, True, from_bytes, None),
-    'fifo_rw': Register(0x74, 1, True, True, None, None),
-    'fifo_en': Register(0x23, 1, True, True, None, None),
-    'sample_rate_div': Register(0x19, 1, True, True, None, None),
-    'config': Register(0x1A, 1, True, True, None, None),
-
-    'accel_x': Register(0x3b, 2, True, False, from_2c, None),
-    'accel_y': Register(0x3d, 2, True, False, from_2c, None),
-    'accel_z': Register(0x3f, 2, True, False, from_2c, None),
-
-    'temp': Register(0x41, 2, True, False, from_2c, None),
-
-    'gyro_x': Register(0x43, 2, True, False, from_2c, None),
-    'gyro_y': Register(0x45, 2, True, False, from_2c, None),
-    'gyro_z': Register(0x47, 2, True, False, from_2c, None),
-
-    'sensors': Register(0x3b, 14, True, False, from_2c_array, None),
-    'accel_all': Register(0x3b, 6, True, False, from_2c_array, None),
-    'gyro_all': Register(0x43, 6, True, False, from_2c_array, None),
-}
-
-# scale in deg/s
-gyro_scale = [250, 500, 1000, 2000]
-
-# scale in g
-accel_scale = [2, 4, 8, 16]
-
-class MPU6050(dict):
-    temp_divider = 340
-    temp_offset = 35
-
-    def __init__(self, scl=None, sda=None, address=0x68):
-        scl = scl if scl is not None else default_pin_scl
-        sda = sda if sda is not None else default_pin_sda
-
-        self.bus = machine.I2C(scl=machine.Pin(scl),
-                               sda=machine.Pin(sda))
-        self.address = address
-        self.buf = memoryview(bytearray(16))
-
-        # used by the complementary filter
-        self.lastsample = time.ticks_ms()
-
+        self.init_pins()
+        self.init_i2c()
         self.init_device()
-        self.init_calibration()
-        self.init_filter()
 
-    def init_calibration(self):
-        self.accel_cal = [0] * 3
-        self.gyro_cal = [0] * 3
+    def init_i2c(self):
+        print('* initializing i2c')
+        self.bus = I2C(scl=self.pin_scl,
+                       sda=self.pin_sda)
 
-    def __repr__(self):
-        return '<mpu6050 @ %02X>' % self.address
+    def init_pins(self):
+        print('* initializing pins')
+        self.pin_sda = Pin(self.sda)
+        self.pin_scl = Pin(self.scl)
+        self.pin_intr = Pin(self.intr, mode=Pin.IN)
 
-    def __getitem__(self, k):
-        reg = registers[k]
-        if not reg.read:
-            raise NotImplementedError('register %s cannot be read', k)
+    def identify(self):
+        print('* identifying i2c device')
+        val = self.read_byte(MPU6050_RA_WHO_AM_I)
+        if val != MPU6050_ADDRESS_AD0_LOW:
+            raise OSError("No mpu6050 at address {}".format(self.address))
 
-        data = self.read(reg.address, reg.size)
-        if callable(reg.txout):
-            data = reg.txout(data)
-        elif reg.size == 1:
-            data = data[0]
+    def reset(self):
+        print('* reset')
+        self.write_byte(MPU6050_RA_PWR_MGMT_1, (
+            (1 << MPU6050_PWR1_DEVICE_RESET_BIT)
+        ))
+        time.sleep_ms(100)
 
-        return data
-
-    def __setitem__(self, k, v):
-        reg = registers[k]
-        if not reg.write:
-            raise NotImplementedError('register %s cannot be written', k)
-
-        if callable(reg.txin):
-            v = reg.txin(v)
-        elif isinstance(v, int):
-            v = bytearray([v])
-
-        self.write(reg.address, v)
-
-    def read(self, reg, length):
-        if length > len(self.buf):
-            raise ValueError('Length must be <= {}'.format(len(m)))
-
-        self.bus.readfrom_mem_into(self.address, reg, self.buf[:length])
-        return self.buf[:length]
-
-    def write(self, reg, val):
-        self.bus.writeto_mem(self.address, reg, val)
-
-    def keys(self):
-        return registers.keys()
+        self.write_byte(MPU6050_RA_SIGNAL_PATH_RESET, (
+            (1 << MPU6050_PATHRESET_GYRO_RESET_BIT) |
+            (1 << MPU6050_PATHRESET_ACCEL_RESET_BIT) |
+            (1 << MPU6050_PATHRESET_TEMP_RESET_BIT)
+        ))
+        time.sleep_ms(100)
 
     def init_device(self):
-        self['power_mgmt_1'] = 0
+        print('* initializing mpu')
 
-    def set_dlpf(self, val):
-        cfg = (self['config'] & 0b11111000) | val
-        self['config'] = cfg
+        self.identify()
 
-    def wait_for_stable(self):
-        '''wait for gyro reading to stabilize'''
+        # disable sleep mode and select clock source
+        self.write_byte(MPU6050_RA_PWR_MGMT_1, MPU6050_CLOCK_PLL_XGYRO)
 
-    def calibrate(self):
-        samples = []
-        for i in range(100):
-            samples.append(self['sensors'])
+        # enable all sensors
+        self.write_byte(MPU6050_RA_PWR_MGMT_2, 0)
 
-        self.accel_cal = [
-            sum(sample[0] for sample in samples)/len(samples),
-            sum(sample[1] for sample in samples)/len(samples),
-            sum(sample[2] for sample in samples)/len(samples),
-        ]
+        # set sampling rate
+        self.write_byte(MPU6050_RA_SMPLRT_DIV, self.rate)
 
-        rangehi = self.get_accel_scale()
-        grav = 65536/2/rangehi
-        self.accel_cal[2] -= grav
+        # enable dlpf
+        self.write_byte(MPU6050_RA_CONFIG, 1)
 
-        self.gyro_cal = [
-            sum(sample[4] for sample in samples)/len(samples),
-            sum(sample[5] for sample in samples)/len(samples),
-            sum(sample[6] for sample in samples)/len(samples),
-        ]
+        # explicitly set accel/gyro range
+        self.set_accel_range(MPU6050_ACCEL_FS_2)
+        self.set_gyro_range(MPU6050_GYRO_FS_250)
 
-    def read_gyro_raw(self):
-        return [(vr-vc) for vr, vc in zip(self['gyro_all'], self.gyro_cal)]
+    def set_gyro_range(self, fsr):
+        shift = (MPU6050_GCONFIG_FS_SEL_BIT - MPU6050_GCONFIG_FS_SEL_LENGTH + 1)
+        val = self.read_byte(MPU6050_RA_GYRO_CONFIG)
+        val &= ~(0b11 << shift)
+        val |= fsr << shift
+        self.write_byte(MPU6050_RA_GYRO_CONFIG, val)
 
-    def read_gyro_scaled(self):
-        val = self.read_gyro_raw()
-        scalei = (self['gyro_config'] & 0b00011000) >> 3
-        scalev = gyro_scale[scalei]
+    def set_accel_range(self, fsr):
+        shift = (MPU6050_ACONFIG_AFS_SEL_BIT - MPU6050_ACONFIG_AFS_SEL_LENGTH + 1)
+        val = self.read_byte(MPU6050_RA_ACCEL_CONFIG)
+        val &= ~(0b11 << shift)
+        val |= fsr << shift
+        self.write_byte(MPU6050_RA_ACCEL_CONFIG, val)
 
-        return [x/(65536//scalev//2) for x in val]
+    def enable_fifo(self):
+        print('* enable fifo')
+        # enable writing values to fifo
+        self.write_byte(MPU6050_RA_FIFO_EN, (
+            (1 << MPU6050_TEMP_FIFO_EN_BIT) |
+            (1 << MPU6050_XG_FIFO_EN_BIT) |
+            (1 << MPU6050_YG_FIFO_EN_BIT) |
+            (1 << MPU6050_ZG_FIFO_EN_BIT) |
+            (1 << MPU6050_ACCEL_FIFO_EN_BIT)
+        ))
 
-    def set_gyro_scale(self, scale):
-        if scale not in gyro_scale:
-            raise ValueError(scale)
+        val = self.read_byte(MPU6050_RA_USER_CTRL)
+        val |= (1 << MPU6050_USERCTRL_FIFO_EN_BIT)
+        self.write_byte(MPU6050_RA_USER_CTRL, val)
 
-        i = gyro_scale.index(scale)
-        cfg = (self['gyro_config'] & 0b11100111) | (i<<3)
-        self['gyro_config'] = cfg
+        self.use_fifo = True
 
-    def read_accel_raw(self):
-        return [(vr-vc) for vr, vc in zip(self['accel_all'], self.accel_cal)]
+    def disable_fifo(self):
+        print('* disable fifo')
+        val = self.read_byte(MPU6050_RA_USER_CTRL)
+        val &= ~(1 << MPU6050_USERCTRL_FIFO_EN_BIT)
+        self.write_byte(MPU6050_RA_USER_CTRL, val)
 
-    def read_accel_scaled(self):
-        val = self.read_accel_raw()
-        scalei = (self['accel_config'] & 0b00011000) >> 3
-        scalev = accel_scale[scalei]
+        self.write_byte(MPU6050_RA_FIFO_EN, 0)
 
-        return [x/(65536//scalev//2) for x in val]
+        self.use_fifo = False
 
-    def set_accel_scale(self, scale):
-        if scale not in accel_scale:
-            raise ValueError(scale)
+    def reset_fifo(self):
+        print('* reset fifo')
+        self.disable_fifo()
+        val = self.read_byte(MPU6050_RA_USER_CTRL)
+        val &= ~(1 << MPU6050_USERCTRL_FIFO_RESET_BIT)
+        self.write_byte(MPU6050_RA_USER_CTRL, val)
 
-        i = accel_scale.index(scale)
-        cfg = (self['accel_config'] & 0b11100111) | (i<<3)
-        self['accel_config'] = cfg
+    def fifo_count(self):
+        count = self.read_word(MPU6050_RA_FIFO_COUNTH)
+        return count
 
-    def get_accel_scale(self):
-        scalei = (self['accel_config'] & 0b00011000) >> 3
-        return accel_scale[scalei]
+    def disable_interrupt(self):
+        print('* disabling data ready interrupt')
+        val = self.read_byte(MPU6050_RA_INT_ENABLE)
+        self.write_byte(MPU6050_RA_INT_ENABLE, (
+            val & ~(
+                (1 << MPU6050_INTERRUPT_DATA_RDY_BIT) |
+                (1 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT)
+            )
+        ));
 
-    def read_temp_raw(self):
-        val = self['temp']
-        return val
+        self.pin_intr.irq(handler=None)
 
-    def read_temp_scaled(self):
-        val = self.read_temp_raw()
-        return (val/self.temp_divider) + self.temp_offset
+    def enable_interrupt(self):
+        print('* enabling data ready interrupt')
+        self.pin_intr.irq(handler=self.isr, trigger=Pin.IRQ_RISING)
 
-    # from: http://stackoverflow.com/questions/3755059/3d-accelerometer-calculate-the-orientation
-    # and: http://www.nxp.com/assets/documents/data/en/application-notes/AN3461.pdf
-    def read_accel_rad(self):
-        x, y, z = self.read_accel_scaled()
+        val = self.read_byte(MPU6050_RA_INT_ENABLE)
+        self.write_byte(MPU6050_RA_INT_ENABLE, (
+            val | (
+                (1 << MPU6050_INTERRUPT_DATA_RDY_BIT) |
+                (1 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT)
+            )
+        ));
 
-        x2 = (x*x);
-        y2 = (y*y);
-        z2 = (z*z);
+    def write_byte(self, reg, val):
+        self.bytebuf[0] = val
+        self.bus.writeto_mem(self.address, reg, self.bytebuf)
 
-        # this is equation 37 (aka 26) from AN3461
-        pitch = math.atan2(-x, math.sqrt(y2 + z2))
+    def read_byte(self, reg):
+        self.bus.readfrom_mem_into(self.address, reg, self.bytebuf)
+        return self.bytebuf[0]
 
-        # this is equation 38 from AN3461
-        roll = math.atan2(y, (
-            math.copysign(1, z)
-            * (math.sqrt(z2 + (0.001)*x2))))
+    def read_word(self, reg):
+        self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
+        return unpack('>H', self.wordbuf)[0]
 
-        return [pitch, roll, 0]
+    def read_word2(self, reg):
+        self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
+        return unpack('>h', self.wordbuf)[0]
 
-    def read_accel_deg(self):
-        return [math.degrees(v) for v in self.read_accel_rad()]
+    def isr(self, pin):
+        irqs = self.read_byte(MPU6050_RA_INT_STATUS)
 
-    def init_filter(self):
-        self.lastsample = time.ticks_ms()
-        self.pitch, self.roll, self.yaw = self.read_accel_deg()
+        if irqs & (1 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT):
+            print('overflow!')
 
-    gyro_weight = 0.7
-    accel_weight = 0.3
+        if irqs & (1 << MPU6050_INTERRUPT_DATA_RDY_BIT):
+            self._read_sensor_fifo()
 
-    def read_deg(self):
-        now = time.ticks_ms()
-        dt = time.ticks_diff(self.lastsample, now)/1000
-        self.lastsample = now
+    def read_sensors(self):
+        if not self.use_fifo:
+            self._read_sensor_regs()
 
-        gyro = self.read_gyro_scaled()
-        accel = self.read_accel_deg()
+        irq_state = disable_irq()
+        data = bytearray(self.sensors)
+        enable_irq(irq_state)
 
-        accel_pitch = accel[0]
-        accel_roll = accel[1]
+        data = unpack('>hhhhhhh', data)
+        return [data[i] + self.calibration[i] for i in range(7)]
 
-        dpitch = gyro[0] * dt
-        droll = gyro[1] * dt
+    def _read_sensor_regs(self):
+        self.bus.readfrom_mem_into(self.address,
+                                   MPU6050_RA_ACCEL_XOUT_H,
+                                   self.sensors)
 
-        self.pitch = (self.gyro_weight * (self.pitch + dpitch)
-                      + self.accel_weight * accel_roll)
-        self.roll = (self.gyro_weight * (self.roll + droll)
-                     + self.accel_weight * accel_pitch)
+        return self.sensors
 
-        return [self.pitch, self.roll, self.yaw]
+    def _read_sensor_fifo(self):
+        self.bus.readfrom_mem_into(self.address,
+                                   MPU6050_RA_FIFO_R_W,
+                                   self.sensors)
+
+        return self.sensors
+
+    def _get_sensor_avg(self, samples, softstart=100):
+        sample = self.read_sensors()
+        counters = [0] * 7
+
+        for i in range(samples + softstart):
+            time.sleep_ms(2)
+            sample = self.read_sensors()
+            if i < softstart:
+                continue
+
+            for j, val in enumerate(sample):
+                counters[j] += val
+
+        return [x//samples for x in counters]
+
+    def calibrate(self, samples=None, accel_deadzone=None, gyro_deadzone=None):
+        print('* start calibration')
+
+        self.calibration = [0] * 7
+
+        samples = (samples if samples is not None
+                   else default_calibration_samples)
+        accel_deadzone = (accel_deadzone if accel_deadzone is not None
+                          else default_calibration_accel_deadzone)
+        gyro_deadzone = (gyro_deadzone if gyro_deadzone is not None
+                         else default_calibration_gyro_deadzone)
+
+        expected = [0, 0, 16384, None, 0, 0, 0]
+
+        avg = self._get_sensor_avg(samples)
+        off = [0 if expected[i] is None else expected[i] - avg[i]
+               for i in range(7)]
+
+        accel_ready = False
+        gyro_read = False
+        for passno in range(20):
+            self.calibration[:] = off
+            avg = self._get_sensor_avg(samples)
+
+            check = [0 if expected[i] is None else expected[i] - avg[i]
+                   for i in range(7)]
+            print('- pass {}: {}'.format(passno, check))
+
+            accel_ready = all(abs(x) < accel_deadzone
+                              for x in check[0:3])
+            gyro_ready = all(abs(x) < gyro_deadzone
+                             for x in check[4:7])
+
+            if accel_ready and gyro_ready:
+                break
+
+            if not accel_ready:
+                off[0:3] = [off[i] + check[i]/accel_deadzone for i in range(3)]
+
+            if not gyro_read:
+                off[4:7] = [off[i] + check[i]/gyro_deadzone for i in range(4, 7)]
+
+        print('* calibrated!')
