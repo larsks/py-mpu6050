@@ -28,7 +28,7 @@ def serve(port=8000, interval=20):
         write_dt = time.ticks_diff(now, lastsent)
         read_dt = time.ticks_diff(now, lastread)
         ready = poll.poll(max(0, 1-read_dt))
-        values = mpu.read_angles()
+        values = mpu.read_position()
         lastread = now
 
         if write_dt >= interval:

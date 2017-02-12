@@ -7,7 +7,7 @@ SRC = \
 	constants.py \
 	batmon.py \
 	mpuserver.py \
-	angles.py
+	cfilter.py
 
 OBJ = $(SRC:.py=.mpy)
 

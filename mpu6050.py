@@ -4,7 +4,7 @@ import micropython
 from ustruct import unpack
 
 from constants import *
-import angles
+import cfilter
 
 micropython.alloc_emergency_exception_buf(100)
 
@@ -14,12 +14,16 @@ default_pin_intr = 14
 default_pin_led = 5
 default_sample_rate = 0x20
 
-default_calibration_samples = 100
+default_calibration_samples = 200
 default_calibration_accel_deadzone = 15
 default_calibration_gyro_deadzone = 5
 
 accel_range = [2, 4, 8, 16]
 gyro_range = [250, 500, 1000, 2000]
+
+# These are what the sensors ought to read at rest
+# on a level surface
+expected = [0, 0, 16384, None, 0, 0, 0]
 
 class MPU(object):
     def __init__(self, scl=None, sda=None,
@@ -41,7 +45,7 @@ class MPU(object):
 
         self.calibration = [0] * 7
 
-        self.angles = angles.Angles()
+        self.filter = cfilter.ComplementaryFilter()
 
         self.init_pins()
         self.init_led()
@@ -169,16 +173,22 @@ class MPU(object):
         data[4:7] = [x/(65536//self.gyro_range//2) for x in data[4:7]]
         return data
 
-    def read_angles(self):
-        self.angles.input(self.read_sensors_scaled())
-        return self.angles.angles()
+    def read_position(self):
+        self.filter.input(self.read_sensors_scaled())
+        return self.filter.position
 
     def get_sensor_avg(self, samples, softstart=100):
+        '''Return the average readings from the sensors over the
+        given number of samples.  Discard the first softstart
+        samples to give things time to settle.'''
         sample = self.read_sensors()
         counters = [0] * 7
 
         for i in range(samples + softstart):
+            # the sleep here is to ensure we read a new sample
+            # each time
             time.sleep_ms(2)
+
             sample = self.read_sensors()
             if i < softstart:
                 continue
@@ -200,10 +210,6 @@ class MPU(object):
                           else default_calibration_accel_deadzone)
         gyro_deadzone = (gyro_deadzone if gyro_deadzone is not None
                          else default_calibration_gyro_deadzone)
-
-        # These are what the sensors ought to read at rest
-        # on a level surface
-        expected = [0, 0, 16384, None, 0, 0, 0]
 
         # calculate offsets between the expected values and
         # the average value for each sensor reading
