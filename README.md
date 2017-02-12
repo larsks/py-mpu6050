@@ -8,6 +8,33 @@ simple TCP server.
 [esp8266]: https://en.wikipedia.org/wiki/ESP8266
 [mpu6050]: https://www.invensense.com/products/motion-tracking/6-axis/mpu-6050/
 
+## Requirements
+
+You will need a device running Micropython.
+
+In order to use the `Makefile`, you will need [mpy-cross][] and
+[ampy][].
+
+## Installing
+
+Running `make install` will first byte-compile (most of) the source
+files using [mpy-cross][], and will then use [ampy][] to install the
+files onto your Micropython device.
+
+This project includes a `boot.py` and `main.py` that will cause your
+Micropython board to run the `mpuserver` automatically at boot.  If
+you do not want to install these files, edit the `Makefile` and
+comment out the `STATIC = ...` line.
+
+If your device is not connected to `/dev/ttyUSB0`, you will need to
+either edit the `Makefile` to change the value of the `PORT` setting,
+or provide it on the command line:
+
+    make PORT=/dev/someotherdevice install
+
+[ampy]: https://github.com/adafruit/ampy
+[mpy-cross]: https://github.com/micropython/micropython/tree/master/mpy-cross
+
 ## License
 
 py-mpu6050 -- visualization for py-mpu6050  
