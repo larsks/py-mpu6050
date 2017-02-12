@@ -1,2 +1,6 @@
+import mpu6050
 import mpuserver
-mpuserver.serve()
+
+mpu = mpu6050.MPU()
+server = mpuserver.MPUServer(mpu)
+server.serve()
