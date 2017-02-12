@@ -1,4 +1,4 @@
-from machine import Pin, I2C, disable_irq, enable_irq
+from machine import Pin, I2C, PWM
 import time
 import micropython
 from ustruct import unpack
@@ -11,6 +11,7 @@ micropython.alloc_emergency_exception_buf(100)
 default_pin_scl = 13
 default_pin_sda = 12
 default_pin_intr = 14
+default_pin_led = 5
 default_sample_rate = 0x20
 
 default_calibration_samples = 100
@@ -19,24 +20,28 @@ default_calibration_gyro_deadzone = 5
 
 class MPU(object):
     def __init__(self, scl=None, sda=None,
-                 intr=None, rate=None,
+                 intr=None, led=None, rate=None,
                  address=None):
 
         self.scl = scl if scl is not None else default_pin_scl
         self.sda = sda if sda is not None else default_pin_sda
         self.intr = intr if intr is not None else default_pin_intr
+        self.led = led if led is not None else default_pin_led
         self.rate = rate if rate is not None else default_sample_rate
 
         self.address = address if address else MPU6050_DEFAULT_ADDRESS
-        self.bytebuf = bytearray(1)
-        self.wordbuf = bytearray(2)
+
+        self.buffer = bytearray(16)
+        self.bytebuf = memoryview(self.buffer[0:1])
+        self.wordbuf = memoryview(self.buffer[0:2])
         self.sensors = bytearray(14)
-        self.use_fifo = False
+
         self.calibration = [0] * 7
 
         self.angles = angles.Angles()
 
         self.init_pins()
+        self.init_led()
         self.init_i2c()
         self.init_device()
 
@@ -50,6 +55,22 @@ class MPU(object):
         self.pin_sda = Pin(self.sda)
         self.pin_scl = Pin(self.scl)
         self.pin_intr = Pin(self.intr, mode=Pin.IN)
+        self.pin_led = PWM(Pin(self.led, mode=Pin.OUT))
+
+    def set_state_uncalibrated(self):
+        self.pin_led.freq(1)
+        self.pin_led.duty(500)
+
+    def set_state_calibrating(self):
+        self.pin_led.freq(10)
+        self.pin_led.duty(500)
+
+    def set_state_calibrated(self):
+        self.pin_led.freq(1000)
+        self.pin_led.duty(500)
+
+    def init_led(self):
+        self.set_state_uncalibrated()
 
     def identify(self):
         print('* identifying i2c device')
@@ -159,6 +180,7 @@ class MPU(object):
 
     def calibrate(self, samples=None, accel_deadzone=None, gyro_deadzone=None):
         print('* start calibration')
+        self.set_state_calibrating()
 
         self.calibration = [0] * 7
 
@@ -182,7 +204,7 @@ class MPU(object):
         accel_ready = False
         gyro_read = False
         for passno in range(20):
-            self.calibration[:] = off
+            self.calibration = off
             avg = self.get_sensor_avg(samples)
 
             check = [0 if expected[i] is None else expected[i] - avg[i]
@@ -206,6 +228,11 @@ class MPU(object):
             if not gyro_read:
                 off[4:7] = [off[i] + check[i]//gyro_deadzone
                             for i in range(4, 7)]
+        else:
+            self.calibration = [0] * 7
+            print('! calibration failed')
+            self.set_state_uncalibrated()
+            return
 
         print('* calibrated!')
         self.set_state_calibrated()
