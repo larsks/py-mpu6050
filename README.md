@@ -8,32 +8,16 @@ simple TCP server.
 [esp8266]: https://en.wikipedia.org/wiki/ESP8266
 [mpu6050]: https://www.invensense.com/products/motion-tracking/6-axis/mpu-6050/
 
-## Requirements
+The code uses a complementary filter to combine readings from the
+gyroscope and accelerometer to provide stable and responsive position
+information.
 
-You will need a device running Micropython.
+## References
 
-In order to use the `Makefile`, you will need [mpy-cross][] and
-[ampy][].
-
-## Installing
-
-Running `make install` will first byte-compile (most of) the source
-files using [mpy-cross][], and will then use [ampy][] to install the
-files onto your Micropython device.
-
-This project includes a `boot.py` and `main.py` that will cause your
-Micropython board to run the `mpuserver` automatically at boot.  If
-you do not want to install these files, edit the `Makefile` and
-comment out the `STATIC = ...` line.
-
-If your device is not connected to `/dev/ttyUSB0`, you will need to
-either edit the `Makefile` to change the value of the `PORT` setting,
-or provide it on the command line:
-
-    make PORT=/dev/someotherdevice install
-
-[ampy]: https://github.com/adafruit/ampy
-[mpy-cross]: https://github.com/micropython/micropython/tree/master/mpy-cross
+- [MPU 6050 Register Map and
+  Descriptions](http://www.invensense.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf)
+- [MPU 6050 Data
+  Sheet](https://www.invensense.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf)
 
 ## License
 
