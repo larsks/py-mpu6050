@@ -9,23 +9,25 @@ class ComplementaryFilter(object):
 
     def reset(self):
         self.last = 0
-        self.pitch = 0
-        self.roll = 0
-        self.yaw = 0
+
+        self.accel_pos = [0, 0, 0]
+        self.gyro_pos = [0, 0, 0]
+        self.filter_pos = [0, 0, 0]
 
     def input(self, vals):
         now = time.ticks_ms()
 
         # unpack sensor readings
-        ax, ay, az, temp, gx, gy, gz = vals
+        accel_data = vals[0:3]
+        gyro_data = vals[4:7]
 
-        # convert accelerometer reads to degrees
-        adx, ady, adz = self.accel_degrees(ax, ay, az)
+        # convert accelerometer reading to degrees
+        self.accel_pos = self.calculate_accel_pos(*accel_data)
 
         # if this is our first chunk of data, simply accept
         # the accelerometer reads and move on.
         if self.last == 0:
-            self.pitch, self.roll, self.yaw = [adx, ady, 0]
+            self.filter_pos = self.gyro_pos = self.accel_pos
             self.last = now
             return
 
@@ -36,27 +38,25 @@ class ComplementaryFilter(object):
         self.last = now
 
         # calculate change in position from gyroscope readings
-        dpitch = gx * dt
-        droll = gy * dt
+        gyro_delta = [i * dt for i in gyro_data]
+        self.gyro_pos = [i + j for i, j in zip(self.gyro_pos, gyro_delta)]
 
-        self.pitch = (self.gyro_weight * (self.pitch + dpitch) +
-                      (1-self.gyro_weight) * ady)
-        self.roll = (self.gyro_weight * (self.roll + droll) +
-                      (1-self.gyro_weight) * adx)
+        # pitch
+        self.filter_pos[0] = (
+            self.gyro_weight * (self.filter_pos[0] + gyro_delta[0])
+            + (1-self.gyro_weight) * self.accel_pos[0])
 
-    def accel_degrees(self, x, y, z):
+        # roll
+        self.filter_pos[1] = (
+            self.gyro_weight * (self.filter_pos[1] + gyro_delta[1])
+            + (1-self.gyro_weight) * self.accel_pos[1])
+
+    def calculate_accel_pos(self, x, y, z):
         x2 = (x*x);
         y2 = (y*y);
         z2 = (z*z);
 
-        # roll = rotation about x axis = changes in y angle
-        ady = math.atan2(y, z)
-
-        # pitch = rotation about y axis = changes in x angle
-        adx = math.atan2(-x, math.sqrt(y2 + z2))
+        adx = math.atan2(y, z)
+        ady = math.atan2(-x, math.sqrt(y2 + z2))
 
         return [math.degrees(x) for x in [adx, ady, 0]]
-
-    @property
-    def position(self):
-        return [self.pitch, self.roll, self.yaw]

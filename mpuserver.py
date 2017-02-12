@@ -95,7 +95,14 @@ class MPUServer(object):
 
                     try:
                         obj.write('[')
-                        obj.write(', '.join('{:f}'.format(x) for x in values))
+                        first = True
+                        for bunch in values:
+                            if not first:
+                                obj.write(',')
+                            first = False
+                            obj.write('[')
+                            obj.write(', '.join('{:f}'.format(x) for x in bunch))
+                            obj.write(']')
                         obj.write(']\n')
                     except OSError:
                         print('lost connection from {}'.format(client[1]))

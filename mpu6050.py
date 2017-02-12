@@ -175,7 +175,11 @@ class MPU(object):
 
     def read_position(self):
         self.filter.input(self.read_sensors_scaled())
-        return self.filter.position
+        return [
+            self.filter.filter_pos,
+            self.filter.accel_pos,
+            self.filter.gyro_pos,
+        ]
 
     def get_sensor_avg(self, samples, softstart=100):
         '''Return the average readings from the sensors over the
