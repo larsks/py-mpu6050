@@ -18,6 +18,9 @@ default_calibration_samples = 100
 default_calibration_accel_deadzone = 15
 default_calibration_gyro_deadzone = 5
 
+accel_range = [2, 4, 8, 16]
+gyro_range = [250, 500, 1000, 2000]
+
 class MPU(object):
     def __init__(self, scl=None, sda=None,
                  intr=None, led=None, rate=None,
@@ -69,6 +72,9 @@ class MPU(object):
         self.pin_led.freq(1000)
         self.pin_led.duty(500)
 
+    def set_state_disabled(self):
+        self.pin_led.duty(0)
+
     def init_led(self):
         self.set_state_uncalibrated()
 
@@ -114,6 +120,8 @@ class MPU(object):
         self.set_gyro_range(MPU6050_GYRO_FS_250)
 
     def set_gyro_range(self, fsr):
+        self.gyro_range = gyro_range[fsr]
+
         shift = (MPU6050_GCONFIG_FS_SEL_BIT - MPU6050_GCONFIG_FS_SEL_LENGTH + 1)
         val = self.read_byte(MPU6050_RA_GYRO_CONFIG)
         val &= ~(0b11 << shift)
@@ -121,6 +129,8 @@ class MPU(object):
         self.write_byte(MPU6050_RA_GYRO_CONFIG, val)
 
     def set_accel_range(self, fsr):
+        self.accel_range = accel_range[fsr]
+
         shift = (MPU6050_ACONFIG_AFS_SEL_BIT - MPU6050_ACONFIG_AFS_SEL_LENGTH + 1)
         val = self.read_byte(MPU6050_RA_ACCEL_CONFIG)
         val &= ~(0b11 << shift)
@@ -155,8 +165,8 @@ class MPU(object):
 
     def read_sensors_scaled(self):
         data = self.read_sensors()
-        data[0:3] = [x/(65536//2//2) for x in data[0:3]]
-        data[4:7] = [x/(65536//250//2) for x in data[4:7]]
+        data[0:3] = [x/(65536//self.accel_range//2) for x in data[0:3]]
+        data[4:7] = [x/(65536//self.gyro_range//2) for x in data[4:7]]
         return data
 
     def read_angles(self):
