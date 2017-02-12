@@ -106,68 +106,6 @@ class MPU(object):
         val |= fsr << shift
         self.write_byte(MPU6050_RA_ACCEL_CONFIG, val)
 
-    def enable_fifo(self):
-        print('* enable fifo')
-        # enable writing values to fifo
-        self.write_byte(MPU6050_RA_FIFO_EN, (
-            (1 << MPU6050_TEMP_FIFO_EN_BIT) |
-            (1 << MPU6050_XG_FIFO_EN_BIT) |
-            (1 << MPU6050_YG_FIFO_EN_BIT) |
-            (1 << MPU6050_ZG_FIFO_EN_BIT) |
-            (1 << MPU6050_ACCEL_FIFO_EN_BIT)
-        ))
-
-        val = self.read_byte(MPU6050_RA_USER_CTRL)
-        val |= (1 << MPU6050_USERCTRL_FIFO_EN_BIT)
-        self.write_byte(MPU6050_RA_USER_CTRL, val)
-
-        self.use_fifo = True
-
-    def disable_fifo(self):
-        print('* disable fifo')
-        val = self.read_byte(MPU6050_RA_USER_CTRL)
-        val &= ~(1 << MPU6050_USERCTRL_FIFO_EN_BIT)
-        self.write_byte(MPU6050_RA_USER_CTRL, val)
-
-        self.write_byte(MPU6050_RA_FIFO_EN, 0)
-
-        self.use_fifo = False
-
-    def reset_fifo(self):
-        print('* reset fifo')
-        self.disable_fifo()
-        val = self.read_byte(MPU6050_RA_USER_CTRL)
-        val &= ~(1 << MPU6050_USERCTRL_FIFO_RESET_BIT)
-        self.write_byte(MPU6050_RA_USER_CTRL, val)
-
-    def fifo_count(self):
-        count = self.read_word(MPU6050_RA_FIFO_COUNTH)
-        return count
-
-    def disable_interrupt(self):
-        print('* disabling data ready interrupt')
-        val = self.read_byte(MPU6050_RA_INT_ENABLE)
-        self.write_byte(MPU6050_RA_INT_ENABLE, (
-            val & ~(
-                (1 << MPU6050_INTERRUPT_DATA_RDY_BIT) |
-                (1 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT)
-            )
-        ));
-
-        self.pin_intr.irq(handler=None)
-
-    def enable_interrupt(self):
-        print('* enabling data ready interrupt')
-        self.pin_intr.irq(handler=self.isr, trigger=Pin.IRQ_RISING)
-
-        val = self.read_byte(MPU6050_RA_INT_ENABLE)
-        self.write_byte(MPU6050_RA_INT_ENABLE, (
-            val | (
-                (1 << MPU6050_INTERRUPT_DATA_RDY_BIT) |
-                (1 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT)
-            )
-        ));
-
     def write_byte(self, reg, val):
         self.bytebuf[0] = val
         self.bus.writeto_mem(self.address, reg, self.bytebuf)
@@ -184,24 +122,14 @@ class MPU(object):
         self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
         return unpack('>h', self.wordbuf)[0]
 
-    def isr(self, pin):
-        irqs = self.read_byte(MPU6050_RA_INT_STATUS)
-
-        if irqs & (1 << MPU6050_INTERRUPT_FIFO_OFLOW_BIT):
-            print('overflow!')
-
-        if irqs & (1 << MPU6050_INTERRUPT_DATA_RDY_BIT):
-            self._read_sensor_fifo()
-
     def read_sensors(self):
-        if not self.use_fifo:
-            self._read_sensor_regs()
+        self.bus.readfrom_mem_into(self.address,
+                                   MPU6050_RA_ACCEL_XOUT_H,
+                                   self.sensors)
 
-        irq_state = disable_irq()
-        data = bytearray(self.sensors)
-        enable_irq(irq_state)
+        data = unpack('>hhhhhhh', self.sensors)
 
-        data = unpack('>hhhhhhh', data)
+        # apply calibration values
         return [data[i] + self.calibration[i] for i in range(7)]
 
     def read_sensors_scaled(self):
@@ -214,21 +142,7 @@ class MPU(object):
         self.angles.input(self.read_sensors_scaled())
         return self.angles.angles()
 
-    def _read_sensor_regs(self):
-        self.bus.readfrom_mem_into(self.address,
-                                   MPU6050_RA_ACCEL_XOUT_H,
-                                   self.sensors)
-
-        return self.sensors
-
-    def _read_sensor_fifo(self):
-        self.bus.readfrom_mem_into(self.address,
-                                   MPU6050_RA_FIFO_R_W,
-                                   self.sensors)
-
-        return self.sensors
-
-    def _get_sensor_avg(self, samples, softstart=100):
+    def get_sensor_avg(self, samples, softstart=100):
         sample = self.read_sensors()
         counters = [0] * 7
 
@@ -255,9 +169,13 @@ class MPU(object):
         gyro_deadzone = (gyro_deadzone if gyro_deadzone is not None
                          else default_calibration_gyro_deadzone)
 
+        # These are what the sensors ought to read at rest
+        # on a level surface
         expected = [0, 0, 16384, None, 0, 0, 0]
 
-        avg = self._get_sensor_avg(samples)
+        # calculate offsets between the expected values and
+        # the average value for each sensor reading
+        avg = self.get_sensor_avg(samples)
         off = [0 if expected[i] is None else expected[i] - avg[i]
                for i in range(7)]
 
@@ -265,12 +183,14 @@ class MPU(object):
         gyro_read = False
         for passno in range(20):
             self.calibration[:] = off
-            avg = self._get_sensor_avg(samples)
+            avg = self.get_sensor_avg(samples)
 
             check = [0 if expected[i] is None else expected[i] - avg[i]
                    for i in range(7)]
             print('- pass {}: {}'.format(passno, check))
 
+            # check if current values are within acceptable offsets
+            # from the expected values
             accel_ready = all(abs(x) < accel_deadzone
                               for x in check[0:3])
             gyro_ready = all(abs(x) < gyro_deadzone
@@ -280,9 +200,12 @@ class MPU(object):
                 break
 
             if not accel_ready:
-                off[0:3] = [off[i] + check[i]//accel_deadzone for i in range(3)]
+                off[0:3] = [off[i] + check[i]//accel_deadzone
+                            for i in range(3)]
 
             if not gyro_read:
-                off[4:7] = [off[i] + check[i]//gyro_deadzone for i in range(4, 7)]
+                off[4:7] = [off[i] + check[i]//gyro_deadzone
+                            for i in range(4, 7)]
 
         print('* calibrated!')
+        self.set_state_calibrated()
