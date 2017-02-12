@@ -14,10 +14,15 @@ information.
 
 ## References
 
-- [MPU 6050 Register Map and
-  Descriptions](http://www.invensense.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf)
-- [MPU 6050 Data
-  Sheet](https://www.invensense.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf)
+- [MPU 6050 Register Map and Descriptions][1]
+- [MPU 6050 Data Sheet][2]
+- [Tilt Sensing Using a Three-Axis Accelerometer][3]
+- [Quaternions & IMU Sensor Fusion with Complementary Filtering][4]
+
+[1]: http://www.invensense.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf
+[2]: https://www.invensense.com/wp-content/uploads/2015/02/MPU-6000-Datasheet1.pdf
+[3]: http://www.nxp.com/assets/documents/data/en/application-notes/AN3461.pdf
+[4]: https://stanford.edu/class/ee267/lectures/lecture10.pdf
 
 ## License
 
