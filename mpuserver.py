@@ -1,7 +1,7 @@
 import micropython
 micropython.alloc_emergency_exception_buf(100)
 
-from machine import Pin, reset
+from machine import Pin, reset, disable_irq, enable_irq
 import gc
 
 from mpu6050 import MPU
@@ -24,9 +24,19 @@ class MPUServer(object):
         self.write_interval = write_interval
         self.force_cal_pin = force_cal_pin
         self.force_cal_flag = False
+        self.calibrating = False
+        self.last_isr = 0
         self.init_pins()
         self.init_socket()
+
+        self.calibrate()
+
+    def calibrate(self):
+        state = disable_irq()
+        self.calibrating = True
         self.mpu.calibrate()
+        self.calibrating = False
+        enable_irq(state)
 
     def __repr__(self):
         return '<{} @ {}>'.format(self.__class__.__name__, self.port)
@@ -43,8 +53,16 @@ class MPUServer(object):
         self.sock = sock
 
     def isr(self, pin):
+        if self.calibrating:
+            return
+
+        # debounce
+        if time.ticks_diff(time.ticks_ms(), self.last_isr) < 10:
+            return
+
         print('recalibrate!')
         self.force_cal_flag = True
+        self.last_isr = time.ticks_ms()
 
     def serve(self):
         print('starting mpu server on port {}'.format(self.port))
