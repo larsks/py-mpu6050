@@ -14,6 +14,9 @@ class ComplementaryFilter(object):
         self.gyro_pos = [0, 0, 0]
         self.filter_pos = [0, 0, 0]
 
+    def reset_gyro(self):
+        self.gyro_pos = self.filter_pos
+
     def input(self, vals):
         now = time.ticks_ms()
 

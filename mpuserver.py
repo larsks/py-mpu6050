@@ -11,39 +11,31 @@ import select
 import time
 
 default_port = 8000
-default_force_cal_pin = 4
+default_irq_pin = 4
 default_write_interval = 10
 
 class MPUServer(object):
     def __init__(self, mpu,
                  port=default_port,
                  write_interval=default_write_interval,
-                 force_cal_pin=default_force_cal_pin):
+                 irq_pin=default_irq_pin):
         self.mpu = mpu
         self.port = port
         self.write_interval = write_interval
-        self.force_cal_pin = force_cal_pin
-        self.force_cal_flag = False
-        self.calibrating = False
+        self.irq_pin = irq_pin
         self.last_isr = 0
+        self.flag_reset_gyro = False
         self.init_pins()
         self.init_socket()
 
-        self.calibrate()
-
-    def calibrate(self):
-        state = disable_irq()
-        self.calibrating = True
         self.mpu.calibrate()
-        self.calibrating = False
-        enable_irq(state)
 
     def __repr__(self):
         return '<{} @ {}>'.format(self.__class__.__name__, self.port)
 
     def init_pins(self):
-        self.force_cal = Pin(self.force_cal_pin, Pin.IN, Pin.PULL_UP)
-        self.force_cal.irq(handler=self.isr, trigger=Pin.IRQ_FALLING)
+        self.pin_irq = Pin(self.irq_pin, Pin.IN, Pin.PULL_UP)
+        self.pin_irq.irq(handler=self.isr, trigger=Pin.IRQ_FALLING)
 
     def init_socket(self):
         sock = socket.socket()
@@ -53,15 +45,12 @@ class MPUServer(object):
         self.sock = sock
 
     def isr(self, pin):
-        if self.calibrating:
-            return
-
         # debounce
         if time.ticks_diff(time.ticks_ms(), self.last_isr) < 10:
             return
 
-        print('recalibrate!')
-        self.force_cal_flag = True
+        print('! reset gyro request')
+        self.flag_reset_gyro = True
         self.last_isr = time.ticks_ms()
 
     def serve(self):
@@ -78,9 +67,9 @@ class MPUServer(object):
             read_dt = time.ticks_diff(now, lastread)
             ready = poll.poll(max(0, 1-read_dt))
 
-            if self.force_cal_flag:
-                self.calibrate()
-                self.force_cal_flag = False
+            if self.flag_reset_gyro:
+                self.mpu.filter.reset_gyro()
+                self.flag_reset_gyro = False
 
             values = self.mpu.read_position()
             lastread = now
