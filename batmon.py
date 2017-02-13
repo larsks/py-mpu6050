@@ -21,8 +21,12 @@ def set_adc_mode(mode):
         print("ADC mode changed in flash; restart to use it!")
         return
 
-def adc_reads_vcc():
+def enable_battery_monitor():
     set_adc_mode(ADC_MODE_VCC)
 
-def adc_reads_analog():
+def disable_battery_monitor():
     set_adc_mode(ADC_MODE_ADC)
+
+def battery():
+    vcc = machine.ADC(1)
+    return vcc.read()
