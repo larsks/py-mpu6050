@@ -1,3 +1,4 @@
+import gc
 from machine import Pin, I2C, PWM
 import time
 import micropython
@@ -14,7 +15,7 @@ default_pin_intr = 14
 default_pin_led = 5
 default_sample_rate = 0x20
 
-default_calibration_samples = 200
+default_calibration_numsamples = 200
 default_calibration_accel_deadzone = 15
 default_calibration_gyro_deadzone = 5
 
@@ -24,6 +25,9 @@ gyro_range = [250, 500, 1000, 2000]
 # These are what the sensors ought to read at rest
 # on a level surface
 expected = [0, 0, 16384, None, 0, 0, 0]
+
+class CalibrationFailure(Exception):
+    pass
 
 class MPU(object):
     def __init__(self, scl=None, sda=None,
@@ -202,54 +206,104 @@ class MPU(object):
 
         return [x//samples for x in counters]
 
-    def calibrate(self, samples=None, accel_deadzone=None, gyro_deadzone=None):
-        print('* start calibration')
-        self.set_state_calibrating()
+    stable_reading_timeout = 10
+    max_gyro_variance = 5
 
+    def wait_for_stable(self, numsamples=10):
+        print('* waiting for gyros to stabilize')
+
+        gc.collect()
+        time_start = time.time()
+        samples = []
+
+        while True:
+            now = time.time()
+            if now - time_start > self.stable_reading_timeout:
+                raise CalibrationFailure()
+
+            # the sleep here is to ensure we read a new sample
+            # each time
+            time.sleep_ms(2)
+
+            sample = self.read_sensors()
+            samples.append(sample[4:7])
+            if len(samples) < numsamples:
+                continue
+
+            samples = samples[-numsamples:]
+
+            totals = [0] * 3
+            for cola, colb in zip(samples, samples[1:]):
+                deltas = [abs(a-b) for a,b in zip(cola, colb)]
+                totals = [a+b for a,b in zip(deltas, totals)]
+
+            avg = [a/numsamples for a in totals]
+
+            if all(x < self.max_gyro_variance for x in avg):
+                break
+
+        now = time.time()
+        print('* gyros stable after {:0.2f} seconds'.format(now-time_start))
+
+    def calibrate(self,
+                  numsamples=None,
+                  accel_deadzone=None,
+                  gyro_deadzone=None):
+
+        old_calibration = self.calibration
         self.calibration = [0] * 7
 
-        samples = (samples if samples is not None
-                   else default_calibration_samples)
+        numsamples = (numsamples if numsamples is not None
+                   else default_calibration_numsamples)
         accel_deadzone = (accel_deadzone if accel_deadzone is not None
                           else default_calibration_accel_deadzone)
         gyro_deadzone = (gyro_deadzone if gyro_deadzone is not None
                          else default_calibration_gyro_deadzone)
 
-        # calculate offsets between the expected values and
-        # the average value for each sensor reading
-        avg = self.get_sensor_avg(samples)
-        off = [0 if expected[i] is None else expected[i] - avg[i]
-               for i in range(7)]
+        print('* start calibration')
+        self.set_state_calibrating()
 
-        accel_ready = False
-        gyro_read = False
-        for passno in range(20):
-            self.calibration = off
-            avg = self.get_sensor_avg(samples)
+        try:
+            self.wait_for_stable()
+            gc.collect()
 
-            check = [0 if expected[i] is None else expected[i] - avg[i]
+            # calculate offsets between the expected values and
+            # the average value for each sensor reading
+            avg = self.get_sensor_avg(numsamples)
+            off = [0 if expected[i] is None else expected[i] - avg[i]
                    for i in range(7)]
-            print('- pass {}: {}'.format(passno, check))
 
-            # check if current values are within acceptable offsets
-            # from the expected values
-            accel_ready = all(abs(x) < accel_deadzone
-                              for x in check[0:3])
-            gyro_ready = all(abs(x) < gyro_deadzone
-                             for x in check[4:7])
+            accel_ready = False
+            gyro_read = False
+            for passno in range(20):
+                self.calibration = off
+                avg = self.get_sensor_avg(numsamples)
 
-            if accel_ready and gyro_ready:
-                break
+                check = [0 if expected[i] is None else expected[i] - avg[i]
+                       for i in range(7)]
+                print('- pass {}: {}'.format(passno, check))
 
-            if not accel_ready:
-                off[0:3] = [off[i] + check[i]//accel_deadzone
-                            for i in range(3)]
+                # check if current values are within acceptable offsets
+                # from the expected values
+                accel_ready = all(abs(x) < accel_deadzone
+                                  for x in check[0:3])
+                gyro_ready = all(abs(x) < gyro_deadzone
+                                 for x in check[4:7])
 
-            if not gyro_read:
-                off[4:7] = [off[i] + check[i]//gyro_deadzone
-                            for i in range(4, 7)]
-        else:
-            self.calibration = [0] * 7
+                if accel_ready and gyro_ready:
+                    break
+
+                if not accel_ready:
+                    off[0:3] = [off[i] + check[i]//accel_deadzone
+                                for i in range(3)]
+
+                if not gyro_ready:
+                    off[4:7] = [off[i] + check[i]//gyro_deadzone
+                                for i in range(4, 7)]
+            else:
+                raise CalibrationFailure()
+        except CalibrationFailure:
+            self.calibration = old_calibration
             print('! calibration failed')
             self.set_state_uncalibrated()
             return
