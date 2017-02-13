@@ -13,15 +13,29 @@ import time
 default_port = 8000
 default_irq_pin = 4
 default_write_interval = 10
+default_gc_interval = 1000
+
+def tojson(values):
+    inner = []
+    for item in values:
+        msg = ('['
+               + (', '.join(str(x) for x in item))
+               + ']')
+        inner.append(msg)
+
+    return ('[' + ','.join(inner) + ']\n')
+
 
 class MPUServer(object):
     def __init__(self, mpu,
                  port=default_port,
                  write_interval=default_write_interval,
+                 gc_interval=default_gc_interval,
                  irq_pin=default_irq_pin):
         self.mpu = mpu
         self.port = port
         self.write_interval = write_interval
+        self.gc_interval = gc_interval
         self.irq_pin = irq_pin
         self.last_isr = 0
         self.flag_reset_gyro = False
@@ -38,11 +52,7 @@ class MPUServer(object):
         self.pin_irq.irq(handler=self.isr, trigger=Pin.IRQ_FALLING)
 
     def init_socket(self):
-        sock = socket.socket()
-        sock.bind(('0.0.0.0', self.port))
-        sock.listen(2)
-
-        self.sock = sock
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def isr(self, pin):
         # debounce
@@ -56,16 +66,15 @@ class MPUServer(object):
     def serve(self):
         print('starting mpu server on port {}'.format(self.port))
 
-        poll = select.poll()
-        poll.register(self.sock, select.POLLIN)
-        clients = {}
-        lastsent = 0
-        lastread = 0
+        lastgc = lastsent = lastread = time.ticks_ms()
+
         while True:
             now = time.ticks_ms()
             write_dt = time.ticks_diff(now, lastsent)
             read_dt = time.ticks_diff(now, lastread)
-            ready = poll.poll(max(0, 1-read_dt))
+            gc_dt = time.ticks_diff(now, lastgc)
+
+            time.sleep_ms(max(0, 1-read_dt))
 
             if self.flag_reset_gyro:
                 self.mpu.filter.reset_gyro()
@@ -76,48 +85,7 @@ class MPUServer(object):
 
             if write_dt >= self.write_interval:
                 lastsent = time.ticks_ms()
-                for c in clients.values():
-                    poll.register(c[0])
+                self.sock.sendto(tojson(values), ('192.168.4.2', 8000))
 
-            for obj, eventmask in ready:
-                if obj is self.sock:
-                    if eventmask & select.POLLIN:
-                        cl, addr = self.sock.accept()
-                        print('new connection from {}'.format(addr))
-                        clients[id(cl)] = (cl, addr)
-                        poll.register(cl, select.POLLOUT|select.POLLHUP)
-                    else:
-                        print('connection says what?')
-
-                elif eventmask & select.POLLHUP:
-                    client = clients[id(obj)]
-                    print('client {} has disconnected'.format(client[1]))
-                    obj.close()
-                    del clients[id(obj)]
-                    poll.unregister(obj)
-                    gc.collect()
-
-                elif eventmask & select.POLLOUT:
-                    client = clients[id(obj)]
-
-                    try:
-                        obj.write('[')
-                        first = True
-                        for bunch in values:
-                            if not first:
-                                obj.write(',')
-                            first = False
-                            obj.write('[')
-                            obj.write(', '.join('{:f}'.format(x) for x in bunch))
-                            obj.write(']')
-                        obj.write(']\n')
-                    except OSError:
-                        print('lost connection from {}'.format(client[1]))
-                        obj.close()
-                        del clients[id(obj)]
-                        gc.collect()
-
-                    poll.unregister(obj)
-                else:
-                    print('client says what?')
-
+            if gc_dt >= self.gc_interval:
+                gc.collect()
