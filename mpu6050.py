@@ -188,6 +188,24 @@ class MPU(object):
             self.filter.gyro_pos,
         ]
 
+    def set_dhpf_mode(self, bandwidth):
+        self.set_bitfield(MPU6050_RA_ACCEL_CONFIG,
+                          MPU6050_ACONFIG_ACCEL_HPF_BIT,
+                          MPU6050_ACONFIG_ACCEL_HPF_LENGTH,
+                          bandwidth)
+
+    def set_motion_detection_threshold(self, threshold):
+        self.write_byte(MPU6050_RA_MOT_THR, threshold)
+
+    def set_motion_detection_duration(self, duration):
+        self.write_byte(MPU6050_RA_MOT_DUR, duration)
+
+    def set_int_motion_enabled(self, enabled):
+        self.set_bitfield(MPU6050_RA_INT_ENABLE,
+                          MPU6050_INTERRUPT_MOT_BIT,
+                          1,
+                          enabled)
+
     def get_sensor_avg(self, samples, softstart=100):
         '''Return the average readings from the sensors over the
         given number of samples.  Discard the first softstart
