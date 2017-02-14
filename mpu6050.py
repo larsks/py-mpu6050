@@ -56,6 +56,29 @@ class MPU(object):
         self.init_i2c()
         self.init_device()
 
+    def write_byte(self, reg, val):
+        self.bytebuf[0] = val
+        self.bus.writeto_mem(self.address, reg, self.bytebuf)
+
+    def read_byte(self, reg):
+        self.bus.readfrom_mem_into(self.address, reg, self.bytebuf)
+        return self.bytebuf[0]
+
+    def set_bitfield(self, reg, pos, length, val):
+        old = self.read_byte(reg)
+        shift = pos - length + 1
+        mask = (2**length - 1) << shift
+        new = (old & ~mask) | (val << shift)
+        self.write_byte(reg, new)
+
+    def read_word(self, reg):
+        self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
+        return unpack('>H', self.wordbuf)[0]
+
+    def read_word2(self, reg):
+        self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
+        return unpack('>h', self.wordbuf)[0]
+
     def init_i2c(self):
         print('* initializing i2c')
         self.bus = I2C(scl=self.pin_scl,
@@ -129,37 +152,17 @@ class MPU(object):
 
     def set_gyro_range(self, fsr):
         self.gyro_range = gyro_range[fsr]
-
-        shift = (MPU6050_GCONFIG_FS_SEL_BIT - MPU6050_GCONFIG_FS_SEL_LENGTH + 1)
-        val = self.read_byte(MPU6050_RA_GYRO_CONFIG)
-        val &= ~(0b11 << shift)
-        val |= fsr << shift
-        self.write_byte(MPU6050_RA_GYRO_CONFIG, val)
+        self.set_bitfield(MPU6050_RA_GYRO_CONFIG,
+                          MPU6050_GCONFIG_FS_SEL_BIT,
+                          MPU6050_GCONFIG_FS_SEL_LENGTH,
+                          fsr)
 
     def set_accel_range(self, fsr):
         self.accel_range = accel_range[fsr]
-
-        shift = (MPU6050_ACONFIG_AFS_SEL_BIT - MPU6050_ACONFIG_AFS_SEL_LENGTH + 1)
-        val = self.read_byte(MPU6050_RA_ACCEL_CONFIG)
-        val &= ~(0b11 << shift)
-        val |= fsr << shift
-        self.write_byte(MPU6050_RA_ACCEL_CONFIG, val)
-
-    def write_byte(self, reg, val):
-        self.bytebuf[0] = val
-        self.bus.writeto_mem(self.address, reg, self.bytebuf)
-
-    def read_byte(self, reg):
-        self.bus.readfrom_mem_into(self.address, reg, self.bytebuf)
-        return self.bytebuf[0]
-
-    def read_word(self, reg):
-        self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
-        return unpack('>H', self.wordbuf)[0]
-
-    def read_word2(self, reg):
-        self.bus.readfrom_mem_into(self.address, reg, self.wordbuf)
-        return unpack('>h', self.wordbuf)[0]
+        self.set_bitfield(MPU6050_RA_ACCEL_CONFIG,
+                          MPU6050_ACONFIG_AFS_SEL_BIT,
+                          MPU6050_ACONFIG_AFS_SEL_LENGTH,
+                          fsr)
 
     def read_sensors(self):
         self.bus.readfrom_mem_into(self.address,
