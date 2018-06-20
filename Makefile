@@ -1,6 +1,6 @@
 PORT = /dev/ttyUSB0
 AMPY = ampy -p $(PORT)
-MPYCROSS = mpy-cross
+MPYCROSS = python -m mpy_cross
 
 SRC = \
 	mpu6050.py \
